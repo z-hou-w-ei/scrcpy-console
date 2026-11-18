@@ -1,6 +1,18 @@
 # scrcpy-console
 
-A Windows front-end for [scrcpy](https://github.com/Genymobile/scrcpy): turns the command-line screen mirroring tool into a double-click GUI with the pieces the CLI version lacks — USB/Wi-Fi switching, a system tray icon, automatic keyboard-layout switching, automatic mobile-hotspot handling, and a mouse that can leave the mirror window.
+## Why this exists (author's note)
+
+I don't want to sign in to my personal WeChat on a work computer, yet when I want to slack off I have to keep reaching for my phone. That's when [scrcpy](https://github.com/Genymobile/scrcpy) came to mind.
+
+I had used it before on the classroom projector to play video material for my students, and it worked great. Don't ask why I didn't just log into my own account for that — I've already explained the reason. USB sticks get forgotten easily and are a hassle anyway.
+
+So this time, to make slacking off a bit smoother, I wrapped a few scripts around scrcpy. The goal is simple: make it fit my own habits. It was never meant to be a general-purpose product.
+
+Thanks to scrcpy — one for all, all for one.
+
+---
+
+A Windows front-end for scrcpy: turns the command-line screen mirroring tool into a double-click GUI with the pieces the CLI version lacks — USB/Wi-Fi switching, a system tray icon, automatic keyboard-layout switching, automatic mobile-hotspot handling, and a mouse that can leave the mirror window.
 
 > This repository is a **wrapper**. The actual mirroring engine is scrcpy by Genymobile; its official release files are bundled unmodified under `vendor/scrcpy/` (see [Bundled binaries](#bundled-binaries)).
 
