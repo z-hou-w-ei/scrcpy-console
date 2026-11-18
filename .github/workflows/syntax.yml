@@ -1,0 +1,87 @@
+name: syntax-check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PowerShell 语法解析
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          $files = Get-ChildItem -Path . -Recurse -Filter *.ps1 | Where-Object { $_.FullName -notmatch '\\vendor\\' }
+          foreach ($f in $files) {
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+              if ($errors -and $errors.Count -gt 0) {
+                  Write-Host ("FAIL " + $f.Name)
+                  foreach ($e in $errors) { Write-Host ("  L" + $e.Extent.StartLineNumber + ": " + $e.Message) }
+                  $failed = $true
+              }
+              else {
+                  Write-Host ("OK   " + $f.Name)
+              }
+          }
+          if ($failed) { exit 1 }
+
+      - name: 编译启动器
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          if (-not (Test-Path $csc)) { throw 'csc.exe not found' }
+          $out = Join-Path $env:RUNNER_TEMP 'scrcpy.exe'
+          $ico = Join-Path $env:GITHUB_WORKSPACE 'assets\scrcpy.ico'
+          & $csc /nologo /target:winexe "/win32icon:$ico" "/out:$out" (Join-Path $env:GITHUB_WORKSPACE 'src\launcher\ScrcpyLauncher.cs')
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw 'launcher build failed' }
+          Write-Host ("built " + (Get-Item $out).Length + " bytes")
+
+      - name: 检查必需文件
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+              'README.md', 'LICENSE', 'NOTICE.md',
+              'src\scrcpy-gui.ps1', 'src\ime-watch.ps1', 'src\hotspot.ps1',
+              'src\launcher\ScrcpyLauncher.cs',
+              'install\install.ps1',
+              'assets\scrcpy.ico',
+              'vendor\scrcpy\scrcpy.exe', 'vendor\scrcpy\adb.exe',
+              'vendor\scrcpy\scrcpy-server', 'vendor\scrcpy\SDL3.dll',
+              'vendor\scrcpy\LICENSE.txt'
+          )
+          $missing = @()
+          foreach ($r in $required) { if (-not (Test-Path $r)) { $missing += $r } }
+          if ($missing.Count -gt 0) {
+              Write-Host ('missing: ' + ($missing -join ', '))
+              exit 1
+          }
+          Write-Host ("all " + $required.Count + " required files present")
+
+      - name: 检查编码（PS 脚本必须带 BOM）
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = @()
+          Get-ChildItem -Path src,install -Recurse -Filter *.ps1 | ForEach-Object {
+              $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+              $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+              if (-not $bom) { $bad += $_.Name }
+          }
+          if ($bad.Count -gt 0) {
+              Write-Host ('no BOM: ' + ($bad -join ', ') + '（Windows PowerShell 5.1 会按 ANSI 读成乱码）')
+              exit 1
+          }
+          Write-Host 'encoding ok'

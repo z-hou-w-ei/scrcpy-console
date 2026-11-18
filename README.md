@@ -1,8 +1,10 @@
 # scrcpy-console
 
+[English](README.en.md) | 中文
+
 Windows 下的 Android 投屏控制台：把 [scrcpy](https://github.com/Genymobile/scrcpy) 包装成「双击即用」的图形界面，补齐了原生命令行版本缺的几件事——有线/无线一键切换、系统托盘、自动输入法切换、自动开关移动热点、鼠标自由穿出窗口。
 
-本项目只是**外壳脚本**，不含 scrcpy 本体与 adb 二进制，需自行放入官方发行包（见「安装」）。
+投屏内核不是本项目写的：scrcpy v5.0.1 官方发行包已原样内置在 `vendor/scrcpy/`，克隆即可使用，来源与许可见下方「内置二进制说明」。
 
 ---
 
