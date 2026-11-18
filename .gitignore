@@ -1,0 +1,13 @@
+# ---- 运行期产物 ----
+*.log
+*.bak
+adbkey
+adbkey.pub
+
+# ---- 构建输出 ----
+/scrcpy.exe
+dist/
+build/
+
+# 说明：vendor/scrcpy 下的官方发行包二进制是有意提交的（见 README「内置二进制说明」），
+# 因此这里不忽略 *.exe / *.dll / scrcpy-server。
