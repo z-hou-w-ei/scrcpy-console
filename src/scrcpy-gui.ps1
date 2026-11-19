@@ -273,9 +273,25 @@ function Get-WifiSerial([string]$manualIp) {
 }
 
 function Stop-Watcher {
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-        Where-Object { $_.CommandLine -like '*ime-watch*' } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $victims = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+        Where-Object { $_.CommandLine -like '*ime-watch*' -and $_.CommandLine -notlike '*-Restore*' }
+    $had = $false
+    foreach ($v in $victims) {
+        $had = $true
+        Stop-Process -Id $v.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    # 看门狗被强杀后没机会自己还原，这里补一刀：把当前前台窗口切回中文，
+    # 否则强关投屏后会停在美式键盘上，打字全变字母
+    if ($had -and (Test-Path $watch)) {
+        try {
+            $p = Start-Process -FilePath 'powershell.exe' `
+                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$watch`"", '-Restore') `
+                -WindowStyle Hidden -PassThru
+            [void]$p.Handle
+            $p.WaitForExit(3000)
+            T 'ime: restore dispatched after watcher kill'
+        } catch { T ('ime: restore failed - ' + $_.Exception.Message) }
+    }
 }
 
 function Stop-Mirror {
@@ -723,13 +739,17 @@ function Connect-Mirror {
     # 低亮投屏：先记原值再用系统原生亮度压到最低档（不叠任何覆盖窗口）
     if ($chkDim.Checked) {
         if ($script:brightnessHelperOK -and (Save-BrightnessSession -Device $serial)) {
-            Apply-DimBrightness -Device $serial
-            $script:dimActive = $true
-            T 'dim: applied (native brightness 0)'
-            Set-Status '已切到低亮（手机面板≈2.5 尼特），正在启动投屏…' 'idle'
+            if (Apply-DimBrightness -Device $serial) {
+                $script:dimActive = $true
+                T 'dim: applied and verified (display brightness 0.0)'
+                Set-Status '已切到低亮（手机面板≈2.5 尼特），正在启动投屏…' 'idle'
+            } else {
+                T 'dim: command accepted but display brightness unchanged'
+                Set-Status '这台手机不接受亮度写入，已按正常亮度连接' 'idle'
+            }
         } else {
-            T 'dim: skipped (brightness helper missing or unreadable)'
-            Set-Status '读不到手机原亮度，改按正常亮度连接' 'idle'
+            T 'dim: skipped (helper missing, unreadable, or already at minimum)'
+            Set-Status '读不到可信的原亮度，改按正常亮度连接' 'idle'
         }
     }
 

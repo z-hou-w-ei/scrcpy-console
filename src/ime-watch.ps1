@@ -2,11 +2,20 @@
 # - scrcpy window focused  -> switch input language to US English
 #   (raw letters reach the phone, so the phone IME can build pinyin)
 # - focus leaves the scrcpy window   -> switch that window back to Chinese
+# - scrcpy exits (including 控制台被强杀后 scrcpy 消失) -> force the foreground
+#   window back to Chinese, so you never get stuck typing in the US layout
+#
+# 单独把当前焦点切回中文：powershell -File ime-watch.ps1 -Restore
 #
 # Logs to phone-ime.log next to this script. Exits when scrcpy exits.
 
+param(
+    [switch]$Restore,
+    [string]$Title = 'PHONE'
+)
+
 $ErrorActionPreference = 'SilentlyContinue'
-$title = 'PHONE'
+$title = $Title
 $intervalMs = 200
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log  = Join-Path $here 'phone-ime.log'
@@ -89,7 +98,27 @@ Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue
 $engHkl = [ImeW]::LoadKeyboardLayout('00000409', 0)
 $zhHkl  = [ImeW]::LoadKeyboardLayout('00000804', 0)
 
+# 把当前前台窗口切回中文，最多重试 $tries 次；成功返回 $true。
+# 单次 WM_INPUTLANGCHANGEREQUEST 常被目标线程忽略（例如刚抢到焦点的浏览器），
+# 所以这里反复投递并回读键盘布局确认，避免"切了但没切过去"。
+function Restore-Chinese {
+    param([int]$tries = 12)
+    for ($i = 0; $i -lt $tries; $i++) {
+        if ([ImeW]::Cur() -ne 0x0409) { return $true }
+        [ImeW]::Switch($zhHkl)
+        Start-Sleep -Milliseconds 120
+    }
+    return ([ImeW]::Cur() -ne 0x0409)
+}
+
 Log "watcher started (title=$title)"
+
+if ($Restore) {
+    # 由控制台在看门狗被杀之后调用：把用户当前正在用的窗口切回中文
+    $ok = Restore-Chinese -tries 20
+    Log ("standalone restore done, ok=$ok cur=0x$(([ImeW]::Cur()).ToString('X4'))")
+    exit 0
+}
 
 $inScrcpy = $false
 $leavePending = $false
@@ -119,7 +148,7 @@ while ($true) {
             Log "focus left scrcpy -> $([ImeW]::TitleOf([ImeW]::GetForegroundWindow()))"
         }
         if ($leavePending) {
-            if ($cur -eq 0x0409 -and $leaveTries -lt 6) {
+            if ($cur -eq 0x0409 -and $leaveTries -lt 12) {
                 [ImeW]::Switch($zhHkl)
                 $leaveTries++
                 Log "-> chinese (try $leaveTries)"
@@ -135,4 +164,6 @@ while ($true) {
     Start-Sleep -Milliseconds $intervalMs
 }
 
-Log "scrcpy exited, watcher stop"
+# scrcpy 已经消失（正常断开、关窗口、或被强杀）：把用户当前窗口切回中文再说
+$ok = Restore-Chinese -tries 20
+Log ("scrcpy exited, watcher stop (restore ok=$ok cur=0x$(([ImeW]::Cur()).ToString('X4')))")
