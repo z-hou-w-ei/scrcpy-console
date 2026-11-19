@@ -38,6 +38,7 @@ scrcpy-console/
 ├── src/
 │   ├── launcher/ScrcpyLauncher.cs   silent launcher compiled into scrcpy.exe
 │   ├── scrcpy-gui.ps1               the console (WinForms + tray icon)
+│   ├── wifi-pair.ps1                wireless-debugging pairing (adb pair + mDNS discovery)
 │   ├── ime-watch.ps1                focus polling, switches keyboard layout
 │   └── hotspot.ps1                  mobile hotspot on/off (WinRT tethering API)
 ├── tools/                           hotspot on / off / toggle .cmd
@@ -88,9 +89,12 @@ Files under `vendor/scrcpy/` are **not** this project's work — they are an unm
 
 * **USB**: plug the cable, choose “USB 有线”, connect.
 * **Wi-Fi**: phone and PC on the same network (or connected to the PC's mobile hotspot), choose “无线 WiFi”.
-  * The first time, connect over USB once — the console runs `adb tcpip 5555`, reads the phone IP and connects wirelessly.
-  * After a phone reboot the 5555 port is gone: either bootstrap over USB again, or pair through the phone's own “Wireless debugging”.
+  * **Cable-free first pairing (Android 11+)**: on the phone open `Settings → System → Developer options → Wireless debugging`, tap “Pair device with pairing code” and leave that dialog open; on the PC open “无线配对…”, press “自动发现”, type the 6-digit code shown on the phone, then “配对并连接”. No cable, and no `adb tcpip 5555` needed.
+  * The console remembers the working `IP:port` in `wifi.json` next to the scripts (git-ignored) and reconnects automatically on the next launch.
+  * **Ports change after a reboot**: the saved address going stale is normal — run the pairing flow again (usually you only need the fresh `IP:port` from the top of the wireless-debugging page).
+  * The legacy route still works: connect over USB once, and the console runs `adb tcpip 5555`, reads the phone IP and connects wirelessly.
   * Wi-Fi mode turns the hotspot on before connecting and restores the previous state on disconnect.
+  * mDNS discovery prefers devices **inside the local subnet**, so it will not grab somebody else's phone on the same LAN; if nothing is found, type `IP:port` into the “无线地址” box.
 * **Manual hotspot**: the three `.cmd` files under `tools/`.
 
 scrcpy's built-in shortcuts inside the mirror window:

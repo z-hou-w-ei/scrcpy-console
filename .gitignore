@@ -3,6 +3,8 @@
 *.bak
 adbkey
 adbkey.pub
+wifi.json
+wifi.json.tmp
 
 # ---- 构建输出 ----
 /scrcpy.exe

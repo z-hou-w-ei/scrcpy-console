@@ -24,7 +24,16 @@ $launcher = Join-Path $here 'scrcpy.exe'        # 双击入口（本控制台的
 $scrcpy   = Join-Path $here 'scrcpy-core.exe'   # 真正的 scrcpy 本体
 $adb    = Join-Path $here 'adb.exe'
 $watch  = Join-Path $here 'ime-watch.ps1'
+$wifiPair = Join-Path $here 'wifi-pair.ps1'
 $title  = 'PHONE'   # 投屏窗口标题，可自行修改
+
+# 无线调试配对助手（Android 11+）：提供 Get-MdnsServices / Invoke-AdbPair / Save-Target 等函数
+$script:pairHelper = $false
+if (Test-Path $wifiPair) {
+    . $wifiPair -AdbExe $adb
+    $script:pairHelper = $true
+}
+T ('wifi-pair helper: ' + $script:pairHelper)
 
 # ---------- hotspot helpers (WiFi mirroring needs the mobile hotspot) ----------
 # 无线模式：连接前自动开热点；断开后只在"本次是我们开的"情况下关掉，
@@ -180,20 +189,47 @@ function Get-UsbSerial {
 }
 
 function Get-WifiSerial([string]$manualIp) {
-    # 1) an already-advertised network device
+    # 0) 已经在 adb devices 里的网络设备
     foreach ($d in (Get-DeviceList)) {
         if ($d -match ':') { return $d }
     }
 
-    # 2) a manually typed address
-    if ($manualIp) {
-        $target = if ($manualIp -match ':') { $manualIp } else { "$manualIp`:5555" }
-        & $adb connect $target 2>$null | Out-Null
-        Start-Sleep -Milliseconds 1500
-        foreach ($d in (Get-DeviceList)) { if ($d -eq $target) { return $d } }
+    # 1) 上次成功用过的地址（wifi.json），重启后端口可能变，失败就继续往下试
+    if ($script:pairHelper) {
+        $saved = Get-SavedTarget
+        if ($saved) {
+            T ('wifi: trying saved target ' + $saved)
+            $hit = Connect-AdbTarget -Target $saved -WaitMs 5000
+            if ($hit) { return $hit }
+        }
     }
 
-    # 3) bootstrap over USB: enable tcpip, read the WiFi address, then connect
+    # 2) 面板上手工填写的地址
+    if ($manualIp) {
+        T ('wifi: trying manual target ' + $manualIp)
+        if ($script:pairHelper) {
+            $hit = Connect-AdbTarget -Target $manualIp -WaitMs 5000
+            if ($hit) { return $hit }
+        }
+        else {
+            $target = if ($manualIp -match ':') { $manualIp } else { "$manualIp`:5555" }
+            & $adb connect $target 2>$null | Out-Null
+            Start-Sleep -Milliseconds 1500
+            foreach ($d in (Get-DeviceList)) { if ($d -eq $target) { return $d } }
+        }
+    }
+
+    # 3) 无线调试广播出来的连接端口（mDNS 自动发现）
+    if ($script:pairHelper) {
+        $disc = Get-ConnectionTarget
+        if ($disc) {
+            T ('wifi: trying mdns target ' + $disc)
+            $hit = Connect-AdbTarget -Target $disc -WaitMs 5000
+            if ($hit) { return $hit }
+        }
+    }
+
+    # 4) 兜底：USB 首次引导（开启 tcpip 5555 并读取手机 IP）
     $usb = Get-UsbSerial
     if (-not $usb) { return '' }
 
@@ -302,12 +338,12 @@ $txtIp.Location = New-Object System.Drawing.Point(88, 81)
 $txtIp.Size = New-Object System.Drawing.Size(200, 24)
 $form.Controls.Add($txtIp)
 
-$lblIpHint = New-Object System.Windows.Forms.Label
-$lblIpHint.Text = '留空自动探测'
-$lblIpHint.Location = New-Object System.Drawing.Point(294, 84)
-$lblIpHint.Size = New-Object System.Drawing.Size(120, 22)
-$lblIpHint.ForeColor = [System.Drawing.Color]::Gray
-$form.Controls.Add($lblIpHint)
+$btnPair = New-Object System.Windows.Forms.Button
+$btnPair.Text = '无线配对…'
+$btnPair.Location = New-Object System.Drawing.Point(294, 80)
+$btnPair.Size = New-Object System.Drawing.Size(120, 26)
+$btnPair.Enabled = $false
+$form.Controls.Add($btnPair)
 
 $chkAwake = New-Object System.Windows.Forms.CheckBox
 $chkAwake.Text = '保持唤醒（投屏期间手机不自动锁屏）'
@@ -422,6 +458,219 @@ $miStop.Add_Click({
 $miExit.Add_Click({ $form.Close() })
 $tray.Add_DoubleClick({ Show-Panel })
 
+# ---------- 无线配对对话框（Android 11+「无线调试」） ----------
+# 流程：手机打开 无线调试 → 使用配对码配对设备 → 电脑点「自动发现」→ 填 6 位码 → 配对并连接
+# 配对端口只在手机弹窗打开期间有效；连上后地址写进 wifi.json 供下次直接用。
+function Show-PairDialog {
+    if (-not $script:pairHelper) { return '' }
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = '无线配对（Android 11+ 无线调试）'
+    $dlg.ClientSize = New-Object System.Drawing.Size(476, 344)
+    $dlg.StartPosition = 'CenterParent'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox = $false
+    $dlg.MinimizeBox = $false
+    $dlg.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $hint = New-Object System.Windows.Forms.Label
+    $hint.Text = "手机上：设置 → 系统 → 开发者选项 → 无线调试`n点「使用配对码配对设备」，让那个弹窗保持打开；`n电脑上点「自动发现」，把 6 位配对码填进来。`n全程不需要数据线。"
+    $hint.Location = New-Object System.Drawing.Point(12, 10)
+    $hint.Size = New-Object System.Drawing.Size(452, 76)
+    $hint.ForeColor = [System.Drawing.Color]::DimGray
+    $dlg.Controls.Add($hint)
+
+    $lblPair = New-Object System.Windows.Forms.Label
+    $lblPair.Text = '配对地址'
+    $lblPair.Location = New-Object System.Drawing.Point(12, 96)
+    $lblPair.Size = New-Object System.Drawing.Size(70, 22)
+    $dlg.Controls.Add($lblPair)
+
+    $txtPair = New-Object System.Windows.Forms.TextBox
+    $txtPair.Location = New-Object System.Drawing.Point(86, 93)
+    $txtPair.Size = New-Object System.Drawing.Size(250, 24)
+    $dlg.Controls.Add($txtPair)
+
+    $lblCode = New-Object System.Windows.Forms.Label
+    $lblCode.Text = '配对码'
+    $lblCode.Location = New-Object System.Drawing.Point(12, 128)
+    $lblCode.Size = New-Object System.Drawing.Size(70, 22)
+    $dlg.Controls.Add($lblCode)
+
+    $txtCode = New-Object System.Windows.Forms.TextBox
+    $txtCode.Location = New-Object System.Drawing.Point(86, 125)
+    $txtCode.Size = New-Object System.Drawing.Size(120, 24)
+    $txtCode.MaxLength = 6
+    $dlg.Controls.Add($txtCode)
+
+    $lblConn = New-Object System.Windows.Forms.Label
+    $lblConn.Text = '连接地址'
+    $lblConn.Location = New-Object System.Drawing.Point(12, 160)
+    $lblConn.Size = New-Object System.Drawing.Size(70, 22)
+    $dlg.Controls.Add($lblConn)
+
+    $txtConn = New-Object System.Windows.Forms.TextBox
+    $txtConn.Location = New-Object System.Drawing.Point(86, 157)
+    $txtConn.Size = New-Object System.Drawing.Size(250, 24)
+    $dlg.Controls.Add($txtConn)
+
+    $lblConnHint = New-Object System.Windows.Forms.Label
+    $lblConnHint.Text = '页面顶部那行'
+    $lblConnHint.Location = New-Object System.Drawing.Point(340, 160)
+    $lblConnHint.Size = New-Object System.Drawing.Size(120, 22)
+    $lblConnHint.ForeColor = [System.Drawing.Color]::Gray
+    $dlg.Controls.Add($lblConnHint)
+
+    $btnDiscover = New-Object System.Windows.Forms.Button
+    $btnDiscover.Text = '自动发现'
+    $btnDiscover.Location = New-Object System.Drawing.Point(12, 194)
+    $btnDiscover.Size = New-Object System.Drawing.Size(104, 30)
+    $dlg.Controls.Add($btnDiscover)
+
+    $btnPairGo = New-Object System.Windows.Forms.Button
+    $btnPairGo.Text = '配对并连接'
+    $btnPairGo.Location = New-Object System.Drawing.Point(124, 194)
+    $btnPairGo.Size = New-Object System.Drawing.Size(136, 30)
+    $dlg.Controls.Add($btnPairGo)
+
+    $btnConnOnly = New-Object System.Windows.Forms.Button
+    $btnConnOnly.Text = '仅连接'
+    $btnConnOnly.Location = New-Object System.Drawing.Point(268, 194)
+    $btnConnOnly.Size = New-Object System.Drawing.Size(96, 30)
+    $dlg.Controls.Add($btnConnOnly)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = '取消'
+    $btnCancel.Location = New-Object System.Drawing.Point(364, 194)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+    $dlg.Controls.Add($btnCancel)
+
+    $lblMsg = New-Object System.Windows.Forms.Label
+    $lblMsg.Text = '等待发现设备…'
+    $lblMsg.Location = New-Object System.Drawing.Point(12, 236)
+    $lblMsg.Size = New-Object System.Drawing.Size(452, 100)
+    $lblMsg.ForeColor = [System.Drawing.Color]::DimGray
+    $dlg.Controls.Add($lblMsg)
+
+    $found = @{ pair = ''; conn = '' }
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 2000
+    $timer.Add_Tick({
+        try {
+            $p = Get-PairingTarget
+            $c = Get-ConnectionTarget
+            if ($p) {
+                $found.pair = $p
+                if (-not $txtPair.Text.Trim()) { $txtPair.Text = $p }
+            }
+            if ($c) {
+                $found.conn = $c
+                if (-not $txtConn.Text.Trim()) { $txtConn.Text = $c }
+            }
+            if ($p -or $c) {
+                $lblMsg.ForeColor = [System.Drawing.Color]::ForestGreen
+                $pText = if ($p) { $p } else { '未广播' }
+                $cText = if ($c) { $c } else { '未广播' }
+                $lblMsg.Text = ("已发现  配对: " + $pText + "`n已发现  连接: " + $cText)
+            }
+        } catch { }
+    })
+    $timer.Start()
+
+    $doPair = {
+        $pair = $txtPair.Text.Trim()
+        if (-not $pair) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = '还没有配对地址：先点「自动发现」，或照手机页面手动填 IP:端口。'
+            return
+        }
+        if ($txtCode.Text.Trim() -notmatch '^\d{6}$') {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = '配对码是手机弹窗上的 6 位数字。'
+            return
+        }
+        $lblMsg.ForeColor = [System.Drawing.Color]::DimGray
+        $lblMsg.Text = '正在配对…'
+        $dlg.Refresh()
+        $r = Invoke-AdbPair -Target $pair -Code $txtCode.Text.Trim()
+        if (-not $r.ok) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = ('配对失败：' + $r.msg + "`n（配对弹窗关闭后端口即失效，请重新打开再点「自动发现」）")
+            return
+        }
+        $lblMsg.Text = '配对成功，正在连接…'
+        $dlg.Refresh()
+        $target = $txtConn.Text.Trim()
+        if (-not $target) { $target = $found.conn }
+        if (-not $target) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::DarkGoldenrod
+            $lblMsg.Text = '配对成功。请把手机「无线调试」页顶部那行 IP 地址和端口 填到「连接地址」，再点「仅连接」。'
+            return
+        }
+        $dev = Connect-AdbTarget -Target $target -WaitMs 8000
+        if (-not $dev) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = '配对成功，但连接没成功。核对「连接地址」是不是页面顶部那行 IP:端口（不是配对弹窗里的端口）。'
+            return
+        }
+        Save-Target $dev
+        $dlg.Tag = $dev
+        $timer.Stop()
+        $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dlg.Close()
+    }
+
+    $btnDiscover.Add_Click({
+        $lblMsg.ForeColor = [System.Drawing.Color]::DimGray
+        $lblMsg.Text = '正在重新发现…'
+        $dlg.Refresh()
+        $p = Get-PairingTarget
+        $c = Get-ConnectionTarget
+        if ($p) { $found.pair = $p; $txtPair.Text = $p }
+        if ($c) { $found.conn = $c; $txtConn.Text = $c }
+        if ($p -or $c) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::ForestGreen
+            $lblMsg.Text = ('已发现  配对: ' + $(if ($p) { $p } else { '无' }) + '   连接: ' + $(if ($c) { $c } else { '无' }))
+        }
+        else {
+            $lblMsg.ForeColor = [System.Drawing.Color]::DarkGoldenrod
+            $lblMsg.Text = '没发现广播：确认手机「无线调试」已打开且配对弹窗还在，或手动填地址。'
+        }
+    })
+
+    $btnPairGo.Add_Click($doPair)
+
+    $btnConnOnly.Add_Click({
+        $target = $txtConn.Text.Trim()
+        if (-not $target) { $target = $found.conn }
+        if (-not $target) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = '请先填「连接地址」（手机无线调试页顶部那行 IP:端口）。'
+            return
+        }
+        $lblMsg.Text = '正在连接…'
+        $dlg.Refresh()
+        $dev = Connect-AdbTarget -Target $target -WaitMs 8000
+        if (-not $dev) {
+            $lblMsg.ForeColor = [System.Drawing.Color]::Firebrick
+            $lblMsg.Text = '连接失败：端口可能已变（重启手机后必变），或手机不在同一网络。'
+            return
+        }
+        Save-Target $dev
+        $dlg.Tag = $dev
+        $timer.Stop()
+        $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dlg.Close()
+    })
+
+    $btnCancel.Add_Click({ $timer.Stop(); $dlg.Close() })
+    $dlg.Add_FormClosed({ $timer.Stop(); $timer.Dispose() })
+
+    [void]$dlg.ShowDialog($form)
+    if ($dlg.Tag) { return [string]$dlg.Tag }
+    return ''
+}
+
 # ---------- connect ----------
 function Connect-Mirror {
     T 'connect: start'
@@ -431,11 +680,17 @@ function Connect-Mirror {
         Confirm-WifiHotspot
         Set-Status '正在查找无线设备…' 'idle'
         $serial = Get-WifiSerial($txtIp.Text.Trim())
+        if (-not $serial -and $script:pairHelper) {
+            Set-Status '未发现已连接的无线设备，打开配对窗口…' 'idle'
+            $serial = Show-PairDialog
+            if ($serial) { $txtIp.Text = $serial }
+        }
         if (-not $serial) {
-            Set-Status "没有可用的无线连接。首次请先用 USB 连一次（会自动开启 5555 并读取手机 IP）。" 'err'
+            Set-Status '无线未连接：可用「无线配对…」（Android 11+ 无线调试，免数据线），或先插一次 USB 引导。' 'err'
             Restore-Hotspot
             return
         }
+        if ($script:pairHelper) { Save-Target $serial }
         $link = '无线'
     }
     else {
@@ -545,9 +800,18 @@ $form.Add_FormClosing({
 $rbWifi.Add_CheckedChanged({
     $txtIp.Enabled = $rbWifi.Checked
     $lblIp.Enabled = $rbWifi.Checked
+    $btnPair.Enabled = ($rbWifi.Checked -and $script:pairHelper)
 })
 $txtIp.Enabled = $false
 $lblIp.Enabled = $false
+
+$btnPair.Add_Click({
+    $got = Show-PairDialog
+    if ($got) {
+        $txtIp.Text = $got
+        Set-Status ('已配对并连接: ' + $got) 'ok'
+    }
+})
 
 # watchdog: clean up in the tray when the mirror window is closed
 $timer = New-Object System.Windows.Forms.Timer
@@ -569,6 +833,11 @@ $script:autoConnect = ($args -contains '--auto')
 $script:autoWifi = ($args -contains '--wifi')
 [void]$form.Add_Shown({
     Repair-BrightnessIfStuck
+    # 上次成功用过的无线地址，填好省得每次找
+    if ($script:pairHelper) {
+        $saved = Get-SavedTarget
+        if ($saved -and -not $txtIp.Text) { $txtIp.Text = $saved }
+    }
     if ($script:autoWifi) { $rbWifi.Checked = $true }
     if ($script:autoConnect -or $script:autoWifi) { Connect-Mirror }
 })
