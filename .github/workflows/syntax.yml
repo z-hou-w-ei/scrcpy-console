@@ -55,6 +55,7 @@ jobs:
           $required = @(
               'README.md', 'LICENSE', 'NOTICE.md',
               'src\scrcpy-gui.ps1', 'src\ime-watch.ps1', 'src\hotspot.ps1',
+              'src\wifi-pair.ps1', 'src\brightness.ps1',
               'src\launcher\ScrcpyLauncher.cs',
               'install\install.ps1',
               'assets\scrcpy.ico',

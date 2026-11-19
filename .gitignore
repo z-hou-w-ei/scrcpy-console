@@ -5,6 +5,7 @@ adbkey
 adbkey.pub
 wifi.json
 wifi.json.tmp
+brightness-session.json
 
 # ---- 构建输出 ----
 /scrcpy.exe

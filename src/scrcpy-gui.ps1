@@ -25,6 +25,7 @@ $scrcpy   = Join-Path $here 'scrcpy-core.exe'   # 真正的 scrcpy 本体
 $adb    = Join-Path $here 'adb.exe'
 $watch  = Join-Path $here 'ime-watch.ps1'
 $wifiPair = Join-Path $here 'wifi-pair.ps1'
+$brightnessHelper = Join-Path $here 'brightness.ps1'
 $title  = 'PHONE'   # 投屏窗口标题，可自行修改
 
 # 无线调试配对助手（Android 11+）：提供 Get-MdnsServices / Invoke-AdbPair / Save-Target 等函数
@@ -34,6 +35,20 @@ if (Test-Path $wifiPair) {
     $script:pairHelper = $true
 }
 T ('wifi-pair helper: ' + $script:pairHelper)
+
+# 低亮投屏：原生亮度存取与还原（brightness.ps1）
+$script:brightnessHelperOK = $false
+if (Test-Path $brightnessHelper) {
+    . $brightnessHelper -AdbExe $adb -ConfigDir $here
+    $script:brightnessHelperOK = $true
+}
+T ('brightness helper: ' + $script:brightnessHelperOK)
+
+function Stop-DimBrightness {
+    if ($script:brightnessHelperOK) { Restore-Brightness | Out-Null }
+    if ($script:dimActive) { T 'dim: cleared' }
+    $script:dimActive = $false
+}
 
 # ---------- hotspot helpers (WiFi mirroring needs the mobile hotspot) ----------
 # 无线模式：连接前自动开热点；断开后只在"本次是我们开的"情况下关掉，
@@ -269,27 +284,13 @@ function Stop-Mirror {
     Stop-Watcher
 }
 
-# ---- safety: never leave the panel stuck on a near-black brightness -------------
-# (a very low brightness makes Android stack a full-screen dim layer that swallows
-# every touch as "untrusted occlusion", which looks exactly like dead touch input)
-function Repair-BrightnessIfStuck {
-    $serial = ''
-    foreach ($l in (& $adb devices 2>$null)) {
-        if ($l -match '^\s*([^\s]+)\s+device') { $serial = $Matches[1]; break }
-    }
-    if (-not $serial) { return }
-    $ok = $false
-    foreach ($cmd in @('settings get system screen_brightness_mode', 'settings get system screen_brightness')) {
-        $val = (& $adb -s $serial shell $cmd 2>&1) -join ''
-        if ($cmd -like '*mode') { if ($val.Trim() -eq '0') { $ok = $true } }
-        elseif ($ok -and $val.Trim() -match '^\d+' -and [int]$val.Trim() -le 3) { $ok = 'stuck' }
-        elseif ($ok) { $ok = $false }
-    }
-    if ($ok -eq 'stuck') {
-        & $adb -s $serial shell 'settings put system screen_brightness_mode 1' 2>&1 | Out-Null
-        & $adb -s $serial shell 'settings put system screen_brightness 128' 2>&1 | Out-Null
-    }
-}
+# ---------- 低亮投屏：走系统原生亮度，不叠任何覆盖窗口 ----------------
+# 实测（Meizu 20 Pro / Android 16）：screen_brightness 设到 0 时
+#   * SurfaceFlinger 图层表不新增任何 dim/scrim，截图内容照常（平均亮度 42/255）
+#   * 面板真实亮度 = 设备亮度曲线最低档约 2.5 尼特，API 无法再低
+# 因此不会触发 "Untrusted touch due to occlusion"（那条保护只针对覆盖窗口）。
+# 具体实现在 brightness.ps1（可单独运行排查），这里只保留状态标记。
+$script:dimActive = $false
 
 # ---------- UI ----------
 $form = New-Object System.Windows.Forms.Form
@@ -369,9 +370,16 @@ $form.Controls.Add($chkIme)
 $chkFull = New-Object System.Windows.Forms.CheckBox
 $chkFull.Text = '全屏启动'
 $chkFull.Location = New-Object System.Drawing.Point(18, 206)
-$chkFull.Size = New-Object System.Drawing.Size(180, 24)
+$chkFull.Size = New-Object System.Drawing.Size(86, 24)
 $chkFull.Checked = $false
 $form.Controls.Add($chkFull)
+
+$chkDim = New-Object System.Windows.Forms.CheckBox
+$chkDim.Text = '低亮投屏（面板≈2.5 尼特，触控正常）'
+$chkDim.Location = New-Object System.Drawing.Point(110, 206)
+$chkDim.Size = New-Object System.Drawing.Size(310, 24)
+$chkDim.Checked = $false
+$form.Controls.Add($chkDim)
 
 $lblQuality = New-Object System.Windows.Forms.Label
 $lblQuality.Text = '画质'
@@ -436,6 +444,7 @@ $tray.Visible = $true
 $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $miShow = $trayMenu.Items.Add('显示控制台')
 $miStop = $trayMenu.Items.Add('断开投屏')
+$miBright = $trayMenu.Items.Add('恢复屏幕亮度')
 $miExit = $trayMenu.Items.Add('退出')
 $tray.ContextMenuStrip = $trayMenu
 
@@ -450,9 +459,15 @@ $miShow.Add_Click({ Show-Panel })
 $miStop.Add_Click({
     $script:sessionActive = $false
     Stop-Mirror
+    Stop-DimBrightness
     Set-Status '已断开' 'idle'
     $btnConnect.Enabled = $true
     $btnStop.Enabled = $false
+    Show-Panel
+})
+$miBright.Add_Click({
+    Stop-DimBrightness
+    Set-Status '已把手机亮度还原为投屏前的设置' 'ok'
     Show-Panel
 })
 $miExit.Add_Click({ $form.Close() })
@@ -704,6 +719,20 @@ function Connect-Mirror {
 
     $script:serial = $serial
     T ("connect: serial=" + $serial)
+
+    # 低亮投屏：先记原值再用系统原生亮度压到最低档（不叠任何覆盖窗口）
+    if ($chkDim.Checked) {
+        if ($script:brightnessHelperOK -and (Save-BrightnessSession -Device $serial)) {
+            Apply-DimBrightness -Device $serial
+            $script:dimActive = $true
+            T 'dim: applied (native brightness 0)'
+            Set-Status '已切到低亮（手机面板≈2.5 尼特），正在启动投屏…' 'idle'
+        } else {
+            T 'dim: skipped (brightness helper missing or unreadable)'
+            Set-Status '读不到手机原亮度，改按正常亮度连接' 'idle'
+        }
+    }
+
     Stop-Mirror
     Start-Sleep -Milliseconds 800
 
@@ -740,6 +769,7 @@ function Connect-Mirror {
     if ($h -eq [IntPtr]::Zero) {
         $script:sessionActive = $false
         Set-Status '投屏窗口没有出现，检查手机是否授权调试（adb devices）。' 'err'
+        Stop-DimBrightness
         Restore-Hotspot
         return
     }
@@ -761,16 +791,17 @@ function Connect-Mirror {
     $mode  = if ($chkMouse.Checked)  { '鼠标自由' } else { '鼠标锁定(Alt解锁)' }
     $ime   = if ($chkIme.Checked)    { '自动输入法' } else { '不切输入法' }
     $awake = if ($chkAwake.Checked)  { '保持唤醒' } else { '允许锁屏' }
+    $dim   = if ($chkDim.Checked -and $script:dimActive) { '低亮' } else { '正常亮度' }
     Set-Status "已连接[$link]  $serial" 'ok'
 
     $btnConnect.Enabled = $false
     $btnStop.Enabled = $true
-    $script:linkLabel = "$link / $awake / $mode / $ime"
+    $script:linkLabel = "$link / $awake / $dim / $mode / $ime"
 
     # hide into the tray so the mirror window is unobstructed
     $tray.Text = "手机投屏 - 已连接[$link]"
     $tray.BalloonTipTitle = '手机投屏已连接'
-    $tray.BalloonTipText = "$link  $serial`n$awake | $mode | $ime"
+    $tray.BalloonTipText = "$link  $serial`n$awake | $dim | $mode | $ime"
     $tray.ShowBalloonTip(3000)
     $form.Hide()
 }
@@ -781,6 +812,7 @@ $btnConnect.Add_Click({ Connect-Mirror })
 $btnStop.Add_Click({
     $script:sessionActive = $false
     Stop-Mirror
+    Stop-DimBrightness
     Restore-Hotspot
     Set-Status '已断开' 'idle'
     $tray.Text = '手机投屏控制台'
@@ -792,6 +824,7 @@ $btnQuit.Add_Click({ $form.Close() })
 $form.Add_FormClosing({
     T 'FormClosing fired'
     Stop-Mirror
+    Stop-DimBrightness
     Restore-Hotspot
     $tray.Visible = $false
     $tray.Dispose()
@@ -820,6 +853,7 @@ $timer.Add_Tick({
     if ($script:sessionActive -and -not (Get-Process -Name 'scrcpy-core', 'scrcpy' -ErrorAction SilentlyContinue)) {
         $script:sessionActive = $false
         Stop-Watcher
+        Stop-DimBrightness
         Restore-Hotspot
         $tray.Text = '手机投屏控制台'
         $btnConnect.Enabled = $true
@@ -832,6 +866,8 @@ $timer.Start()
 $script:autoConnect = ($args -contains '--auto')
 $script:autoWifi = ($args -contains '--wifi')
 [void]$form.Add_Shown({
+    # 上次异常退出（控制台被强杀/断电）留下的低亮状态，先按记录还原
+    Stop-DimBrightness
     Repair-BrightnessIfStuck
     # 上次成功用过的无线地址，填好省得每次找
     if ($script:pairHelper) {

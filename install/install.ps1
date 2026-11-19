@@ -55,7 +55,7 @@ foreach ($need in 'adb.exe', 'scrcpy-server', 'SDL3.dll') {
 }
 
 # ---------- 2. 复制脚本 ----------
-foreach ($f in 'scrcpy-gui.ps1', 'ime-watch.ps1', 'hotspot.ps1', 'wifi-pair.ps1') {
+foreach ($f in 'scrcpy-gui.ps1', 'ime-watch.ps1', 'hotspot.ps1', 'wifi-pair.ps1', 'brightness.ps1') {
     $src = Join-Path $repoRoot "src\$f"
     if (Test-Path $src) { Copy-Item $src (Join-Path $TargetDir $f) -Force; Write-Host "已复制 $f" }
 }

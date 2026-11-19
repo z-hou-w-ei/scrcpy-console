@@ -27,4 +27,16 @@ if (-not $script:instanceMutex.WaitOne(0)) { exit }
 
 ---
 
-（熄屏投屏相关方案仍在讨论中，确认后再补到这里。）
+## 2. 低亮投屏已实现（记录实测口径，供后续维护）
+
+**实现**：`src/brightness.ps1`（`Save-BrightnessSession` / `Apply-DimBrightness` / `Restore-Brightness` / `Repair-BrightnessIfStuck`），控制台面板「低亮投屏」勾选框，托盘「恢复屏幕亮度」，连接前记录 → 置 0，断开/退出/看门狗/启动自愈均还原。
+
+**实测结论（Meizu 20 Pro，Android 16）**：
+
+* 纯 `settings put system screen_brightness 0` **不会**新增 dim/scrim 图层，`screencap` 内容照常（平均亮度 42/255），所以不存在遮挡导致的触控失灵
+* 面板下限约 2.5 尼特（`mBacklight 0.00342 → mNits 2.549`），`mEvenDimmerEnabled=false`，极暗通道不可用
+* 还原逻辑已真机验证：`151 → 0 → 151`，`mode` 一并还原
+
+**仍待决策**：是否再验 scrcpy 的 `-S`（面板断电）。用户明确暂不实验，怕设备出问题。
+
+---
