@@ -33,9 +33,12 @@ if (-not $script:instanceMutex.WaitOne(0)) { exit }
 
 **实测结论（Meizu 20 Pro，Android 16）**：
 
-* 纯 `settings put system screen_brightness 0` **不会**新增 dim/scrim 图层，`screencap` 内容照常（平均亮度 42/255），所以不存在遮挡导致的触控失灵
+* **`settings put system screen_brightness` 在这台 ROM 上无效**：写 0 后 `dumpsys display` 的 `mScreenBrightness` 仍是 `1.0`（面板没变暗）。真正生效的是 `cmd display set-brightness 0.0`（1.0 → 0.0）。因此主路径改成 cmd display，settings 仅作老设备兜底。
+* 纯亮度调节 **不会**新增 dim/scrim 图层，`screencap` 内容照常（平均亮度 42/255），所以不存在遮挡导致的触控失灵
 * 面板下限约 2.5 尼特（`mBacklight 0.00342 → mNits 2.549`），`mEvenDimmerEnabled=false`，极暗通道不可用
-* 还原逻辑已真机验证：`151 → 0 → 151`，`mode` 一并还原
+* 会话记录同时保存 `applied`（0..1 实际输出）与 settings 的 `mode/value`；真机往返 `1.0/2047 → 0/1 → 1.0/2047`
+
+**输入法补充**：强关投屏/强杀看门狗后可能停在美式键盘，已加 `ime-watch.ps1 -Restore` 与看门狗退出前自还原。
 
 **仍待决策**：是否再验 scrcpy 的 `-S`（面板断电）。用户明确暂不实验，怕设备出问题。
 

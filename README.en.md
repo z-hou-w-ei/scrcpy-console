@@ -95,8 +95,9 @@ Files under `vendor/scrcpy/` are **not** this project's work — they are an unm
   * The legacy route still works: connect over USB once, and the console runs `adb tcpip 5555`, reads the phone IP and connects wirelessly.
   * Wi-Fi mode turns the hotspot on before connecting and restores the previous state on disconnect.
   * mDNS discovery prefers devices **inside the local subnet**, so it will not grab somebody else's phone on the same LAN; if nothing is found, type `IP:port` into the “无线地址” box.
-* **Low-brightness mode (the phone panel barely glows)**: tick “低亮投屏” and the console drives the phone's `screen_brightness` down to the lowest step through the system settings before connecting, then restores the original value on disconnect.
-  * It uses the **native system brightness** and stacks no overlay window at all, so Android's “Untrusted touch due to occlusion” protection never triggers — touch, keyboard and mouse keep working.
+* **Low-brightness mode (the phone panel barely glows)**: tick “低亮投屏” and the console pushes the phone's actual output brightness to the lowest step before connecting (through DisplayManager's `cmd display set-brightness`, because writing `settings put screen_brightness` alone changes nothing on some ROMs), then restores the original value on disconnect.
+  * After applying, it reads back `mScreenBrightness` from `dumpsys display` to verify; if the panel did not actually go down the console says so instead of pretending.
+  * It stacks no overlay window at all, so Android's “Untrusted touch due to occlusion” protection never triggers — touch, keyboard and mouse keep working.
   * The panel lands at roughly **2.5 nits** (the bottom of this device's brightness curve): effectively invisible in a lit room, a very faint glow in a pitch-black room. That is the hardware floor; the API cannot go lower.
   * The original value is saved to `brightness-session.json` next to the scripts (git-ignored). If the console is killed or the power drops before it can restore, the **next launch restores automatically**; the tray menu also has “恢复屏幕亮度” as a manual fallback.
 * **Manual hotspot**: the three `.cmd` files under `tools/`.
