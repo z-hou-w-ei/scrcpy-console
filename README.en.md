@@ -116,6 +116,8 @@ scrcpy's built-in shortcuts inside the mirror window:
 * The hotspot is toggled through the Windows WinRT tethering API — the same switch as in Settings. No credentials are written; the SSID/password are whatever is already configured in Windows.
 * Pinning to the Windows 11 Start screen cannot be scripted; right-click the Start Menu shortcut once.
 
+Planned improvements live in [`TODO.md`](TODO.md), each with current behaviour, expected behaviour and an implementation direction.
+
 ## Privacy
 
 * No device serial numbers, IP addresses, `adbkey` files, or logs are committed; `.gitignore` covers them.
