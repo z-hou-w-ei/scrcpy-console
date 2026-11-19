@@ -15,9 +15,20 @@ function T([string]$m) {
 }
 T 'script start'
 
-# single instance: the first one keeps this mutex for its lifetime
+# single instance: the first one keeps this mutex for its lifetime.
+# 第二次启动（双击桌面「手机投屏」）不再静默退出：通过命名事件通知已有实例
+# 把控制台面板唤到前台，然后把消息投递完就退出。
+$script:showEventName = 'Global\ScrcpyConsoleShowPanel'
+# 先建（或打开）事件，再抢互斥体：这样第二次启动一定能找到通知通道，不会撞上初始化窗口
+$script:showEvent = New-Object System.Threading.EventWaitHandle(
+    $false, [System.Threading.EventResetMode]::AutoReset, $script:showEventName)
 $script:instanceMutex = New-Object System.Threading.Mutex($false, 'Global\ScrcpyConsoleGuiMutex')
-if (-not $script:instanceMutex.WaitOne(0)) { exit }
+if (-not $script:instanceMutex.WaitOne(0)) {
+    # 已有实例在托盘里：让它把面板唤出来，自己退场
+    try { [void]$script:showEvent.Set() } catch { }
+    $script:showEvent.Dispose()
+    exit
+}
 
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcher = Join-Path $here 'scrcpy.exe'        # 双击入口（本控制台的启动器）
@@ -846,6 +857,8 @@ $form.Add_FormClosing({
     Stop-Mirror
     Stop-DimBrightness
     Restore-Hotspot
+    $wakePoll.Stop()
+    if ($script:showEvent) { $script:showEvent.Dispose() }
     $tray.Visible = $false
     $tray.Dispose()
 })
@@ -882,6 +895,17 @@ $timer.Add_Tick({
     }
 })
 $timer.Start()
+
+# 第二次启动投递过来的「显示控制台」请求：800ms 轮询一次，几乎无开销
+$wakePoll = New-Object System.Windows.Forms.Timer
+$wakePoll.Interval = 800
+$wakePoll.Add_Tick({
+    if ($script:showEvent -and $script:showEvent.WaitOne(0)) {
+        T 'wake: show panel from second launch'
+        Show-Panel
+    }
+})
+$wakePoll.Start()
 
 $script:autoConnect = ($args -contains '--auto')
 $script:autoWifi = ($args -contains '--wifi')

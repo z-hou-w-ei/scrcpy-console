@@ -30,6 +30,7 @@ A Windows front-end for scrcpy: turns the command-line screen mirroring tool int
 | Keep awake | `--stay-awake` keeps the phone unlocked while mirroring |
 | Quality presets | Smooth / Standard / Sharp, mapped to `--max-fps` and video bit-rate |
 | Tray balloon | Confirms the link type and the enabled options on connect |
+| Single-instance wake | While the console sits in the tray, double-clicking the desktop icon brings the panel back instead of doing nothing |
 
 ## Layout
 

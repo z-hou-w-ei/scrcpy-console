@@ -4,26 +4,19 @@
 
 ---
 
-## 1. 托盘图标存在时，双击桌面快捷方式应唤出已运行的程序
+## 1. 托盘图标存在时，双击桌面快捷方式应唤出已运行的程序 —— **已实现**
 
-**现状**：`src/scrcpy-gui.ps1` 用 `Global\ScrcpyConsoleGuiMutex` 做单实例保护：
+**现状（实现前）**：`src/scrcpy-gui.ps1` 用 `Global\ScrcpyConsoleGuiMutex` 做单实例保护，第二次启动拿不到互斥体就直接 `exit`，看起来就是"双击没反应"。
 
-```powershell
-$script:instanceMutex = New-Object System.Threading.Mutex($false, 'Global\ScrcpyConsoleGuiMutex')
-if (-not $script:instanceMutex.WaitOne(0)) { exit }
-```
+**实现做法**：
 
-于是第二次启动（双击桌面「手机投屏」）会在拿不到互斥体时直接 `exit`，用户看到的现象就是"双击没反应"。
+* 先创建（或打开）命名事件 `Global\ScrcpyConsoleShowPanel`（AutoReset），再抢互斥体——这样第二次启动一定能找到通知通道
+* 第二次启动：给事件 `Set()` 后自己退出（实测 0.6 秒退场）
+* 已有实例用一个 800ms 轮询的 WinForms Timer 检查事件，收到就调用现成的 `Show-Panel`，把面板 `Show` + `ShowWindow(SW_RESTORE)` + `SetForegroundWindow`
+* 只唤面板，不重放 `--auto`/`--wifi`，避免二次启动把已有会话重连一次
+* 退出时 `Stop` + `Dispose` 该 Timer 与事件句柄
 
-**预期**：已有实例在托盘里时，双击快捷方式 → 把已有实例的控制台面板 `Show` 出来并置前，而不是静默退出；如果这次带的是 `--auto` / `--wifi`，已有实例不应重复发起连接。
-
-**实现方向**：
-
-* 保留单实例互斥，但拿不到时先释放后通知：用命名事件（`System.Threading.EventWaitHandle`）或 `WM_COPYDATA`（向窗口类 `SDL_app` 以外的本程序隐藏窗口发消息）唤醒已有实例
-* 已有实例侧用一个 `System.Windows.Forms.Timer` 或后台等待线程监听该事件，收到后调用现有的 `Show-Panel`
-* 通知通道要带一个"是否请求连接"的标志，避免第二次启动的 `--wifi` 参数把已有会话重连一次
-
-**验收**：托盘里有实例 → 双击桌面图标 → 面板弹到前台且状态栏文案不变；连续双击多次不产生额外进程。
+**验收**：托盘里有实例 → 双击桌面图标 → 面板弹到前台且状态栏文案不变；连续双击多次不产生额外进程（已隔离测试通过，trace 里可看到 `wake: show panel from second launch`）。
 
 ---
 
